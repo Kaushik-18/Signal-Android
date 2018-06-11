@@ -68,7 +68,13 @@ public abstract class PushSendJob extends SendJob {
       throw new TextSecureExpiredException("Too many signed prekey rotation failures");
     }
 
-    onPushSend();
+    try {
+      onPushSend();
+      TextSecurePreferences.setNeedsOutageCheck(context, false);
+    } catch (Exception e) {
+      TextSecurePreferences.setNeedsOutageCheck(context, true);
+      throw e;
+    }
   }
 
   protected Optional<byte[]> getProfileKey(@NonNull Recipient recipient) {

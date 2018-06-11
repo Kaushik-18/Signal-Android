@@ -18,6 +18,7 @@ package org.thoughtcrime.securesms;
 
 import android.annotation.SuppressLint;
 import android.app.ProgressDialog;
+import android.arch.lifecycle.ViewModelProviders;
 import android.content.Context;
 import android.content.Intent;
 import android.content.res.TypedArray;
@@ -59,26 +60,17 @@ import org.greenrobot.eventbus.ThreadMode;
 import org.thoughtcrime.securesms.ConversationListAdapter.ItemClickListener;
 import org.thoughtcrime.securesms.components.recyclerview.DeleteItemAnimator;
 import org.thoughtcrime.securesms.components.registration.PulsingFloatingActionButton;
-import org.thoughtcrime.securesms.components.reminder.DefaultSmsReminder;
-import org.thoughtcrime.securesms.components.reminder.DozeReminder;
-import org.thoughtcrime.securesms.components.reminder.ExpiredBuildReminder;
-import org.thoughtcrime.securesms.components.reminder.OutdatedBuildReminder;
-import org.thoughtcrime.securesms.components.reminder.PushRegistrationReminder;
 import org.thoughtcrime.securesms.components.reminder.Reminder;
 import org.thoughtcrime.securesms.components.reminder.ReminderView;
-import org.thoughtcrime.securesms.components.reminder.ShareReminder;
-import org.thoughtcrime.securesms.components.reminder.SystemSmsImportReminder;
-import org.thoughtcrime.securesms.components.reminder.UnauthorizedReminder;
-import org.thoughtcrime.securesms.crypto.MasterSecret;
+import org.thoughtcrime.securesms.conversationlist.ConversationListViewModel;
+import org.thoughtcrime.securesms.conversationlist.ReminderRepository;
 import org.thoughtcrime.securesms.database.DatabaseFactory;
 import org.thoughtcrime.securesms.database.MessagingDatabase.MarkedMessageInfo;
 import org.thoughtcrime.securesms.database.loaders.ConversationListLoader;
-import org.thoughtcrime.securesms.events.ReminderUpdateEvent;
 import org.thoughtcrime.securesms.mms.GlideApp;
 import org.thoughtcrime.securesms.notifications.MarkReadReceiver;
 import org.thoughtcrime.securesms.notifications.MessageNotifier;
 import org.thoughtcrime.securesms.recipients.Recipient;
-import org.thoughtcrime.securesms.util.Util;
 import org.thoughtcrime.securesms.util.ViewUtil;
 import org.thoughtcrime.securesms.util.task.SnackbarAsyncTask;
 import org.whispersystems.libsignal.util.guava.Optional;
@@ -106,12 +98,19 @@ public class ConversationListFragment extends Fragment
   private Locale                      locale;
   private String                      queryFilter  = "";
   private boolean                     archive;
+  private ConversationListViewModel   viewModel;
 
   @Override
   public void onCreate(Bundle icicle) {
     super.onCreate(icicle);
     locale  = (Locale) getArguments().getSerializable(PassphraseRequiredActionBarActivity.LOCALE_EXTRA);
     archive = getArguments().getBoolean(ARCHIVE, false);
+
+    ReminderRepository repository = new ReminderRepository(getContext(), AsyncTask.THREAD_POOL_EXECUTOR);
+
+    viewModel = ViewModelProviders.of(this, new ConversationListViewModel.Factory(repository, EventBus.getDefault()))
+                                  .get(ConversationListViewModel.class);
+    viewModel.getReminders().observe(this, this::onReminder);
   }
 
   @Override
@@ -127,7 +126,7 @@ public class ConversationListFragment extends Fragment
     if (archive) fab.setVisibility(View.GONE);
     else         fab.setVisibility(View.VISIBLE);
 
-    reminderView.setOnDismissListener(() -> updateReminders(true));
+    reminderView.setOnDismissListener(() -> viewModel.refreshReminders());
 
     list.setHasFixedSize(true);
     list.setLayoutManager(new LinearLayoutManager(getActivity()));
@@ -152,9 +151,8 @@ public class ConversationListFragment extends Fragment
   public void onResume() {
     super.onResume();
 
-    updateReminders(true);
+    viewModel.refreshReminders();
     list.getAdapter().notifyDataSetChanged();
-    EventBus.getDefault().register(this);
   }
 
   @Override
@@ -162,7 +160,6 @@ public class ConversationListFragment extends Fragment
     super.onPause();
 
     fab.stopPulse();
-    EventBus.getDefault().unregister(this);
   }
 
   public ConversationListAdapter getListAdapter() {
@@ -178,44 +175,6 @@ public class ConversationListFragment extends Fragment
     if (!TextUtils.isEmpty(this.queryFilter)) {
       setQueryFilter("");
     }
-  }
-
-  @SuppressLint("StaticFieldLeak")
-  private void updateReminders(boolean hide) {
-    new AsyncTask<Context, Void, Optional<? extends Reminder>>() {
-      @Override
-      protected Optional<? extends Reminder> doInBackground(Context... params) {
-        final Context context = params[0];
-        if (UnauthorizedReminder.isEligible(context)) {
-          return Optional.of(new UnauthorizedReminder(context));
-        } else if (ExpiredBuildReminder.isEligible()) {
-          return Optional.of(new ExpiredBuildReminder(context));
-        } else if (OutdatedBuildReminder.isEligible()) {
-          return Optional.of(new OutdatedBuildReminder(context));
-        } else if (DefaultSmsReminder.isEligible(context)) {
-          return Optional.of(new DefaultSmsReminder(context));
-        } else if (Util.isDefaultSmsProvider(context) && SystemSmsImportReminder.isEligible(context)) {
-          return Optional.of((new SystemSmsImportReminder(context)));
-        } else if (PushRegistrationReminder.isEligible(context)) {
-          return Optional.of((new PushRegistrationReminder(context)));
-        } else if (ShareReminder.isEligible(context)) {
-          return Optional.of(new ShareReminder(context));
-        } else if (DozeReminder.isEligible(context)) {
-          return Optional.of(new DozeReminder(context));
-        } else {
-          return Optional.absent();
-        }
-      }
-
-      @Override
-      protected void onPostExecute(Optional<? extends Reminder> reminder) {
-        if (reminder.isPresent() && getActivity() != null && !isRemoving()) {
-          reminderView.showReminder(reminder.get());
-        } else if (!reminder.isPresent()) {
-          reminderView.hide();
-        }
-      }
-    }.executeOnExecutor(AsyncTask.THREAD_POOL_EXECUTOR, getActivity());
   }
 
   private void initializeListAdapter() {
@@ -446,9 +405,13 @@ public class ConversationListFragment extends Fragment
     actionMode = null;
   }
 
-  @Subscribe(threadMode = ThreadMode.MAIN)
-  public void onEvent(ReminderUpdateEvent event) {
-    updateReminders(false);
+
+  public void onReminder(Optional<Reminder> reminder) {
+    if (reminder.isPresent()) {
+      reminderView.showReminder(reminder.get());
+    } else {
+      reminderView.hide();
+    }
   }
 
   private class ArchiveListenerCallback extends ItemTouchHelper.SimpleCallback {

@@ -44,4 +44,13 @@ public abstract class Reminder {
   public boolean isDismissable() {
     return true;
   }
+
+  public @NonNull Importance getImportance() {
+    return Importance.NORMAL;
+  }
+
+
+  public enum Importance {
+    NORMAL, ERROR
+  }
 }

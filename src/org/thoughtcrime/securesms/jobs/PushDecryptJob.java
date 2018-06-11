@@ -153,6 +153,8 @@ public class PushDecryptJob extends ContextJob {
 
     handleMessage(envelope, optionalSmsMessageId);
     database.delete(messageId);
+
+    TextSecurePreferences.setNeedsOutageCheck(context, false);
   }
 
   @Override

@@ -51,6 +51,8 @@ public class ReminderView extends LinearLayout {
   public void showReminder(final Reminder reminder) {
     title.setText(reminder.getTitle());
     text.setText(reminder.getText());
+    container.setBackgroundResource(reminder.getImportance() == Reminder.Importance.ERROR ? R.drawable.reminder_background_error
+                                                                                          : R.drawable.reminder_background_normal);
 
     setOnClickListener(reminder.getOkListener());
 
